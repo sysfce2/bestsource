@@ -141,8 +141,12 @@ void LWAudioDecoder::OpenFile(const std::filesystem::path &SourceFile, int Track
     if (Codec->id == AV_CODEC_ID_AC3 || Codec->id == AV_CODEC_ID_EAC3)
         av_dict_set(&CodecDict, "drc_scale", std::to_string(DrcScale).c_str(), 0);
 
-    if (avcodec_open2(CodecContext, Codec, nullptr) < 0)
+    if (avcodec_open2(CodecContext, Codec, &CodecDict) < 0) {
+        av_dict_free(&CodecDict);
         throw BestSourceException("Could not open audio codec");
+    }
+
+    av_dict_free(&CodecDict);
 }
 
 LWAudioDecoder::LWAudioDecoder(const std::filesystem::path &SourceFile, int Track, int Threads, const std::map<std::string, std::string> &LAVFOpts, double DrcScale) {
