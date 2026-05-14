@@ -1868,14 +1868,9 @@ void BestVideoSource::WriteTimecodes(const std::filesystem::path &TimecodeFile) 
     fprintf(F.get(), "# timecode format v2\n");
     for (const auto &Iter : TrackIndex.Frames) {
         double timestamp = ((Iter.PTS * VP.TimeBase.Num) / (double)VP.TimeBase.Den) * 1000;
-#ifdef __cpp_lib_to_chars
         char buffer[100];
         auto res = std::to_chars(buffer, buffer + sizeof(buffer), timestamp, std::chars_format::fixed, 2);
         fprintf(F.get(), "%s\n", std::string(buffer, res.ptr - buffer).c_str());
-#else
-#warning "Compiler doesn't support std::to_chars() with fixed formatting for floating point numbers, falling back to fprintf() which is locale dependent"
-        fprintf(F.get(), "%.02f\n", timestamp);
-#endif
     }
 }
 
