@@ -1873,6 +1873,7 @@ void BestVideoSource::WriteTimecodes(const std::filesystem::path &TimecodeFile) 
         auto res = std::to_chars(buffer, buffer + sizeof(buffer), timestamp, std::chars_format::fixed, 2);
         fprintf(F.get(), "%s\n", std::string(buffer, res.ptr - buffer).c_str());
 #else
+#warning "Compiler doesn't support std::to_chars() with fixed formatting for floating point numbers, falling back to fprintf() which is locale dependent"
         fprintf(F.get(), "%.02f\n", timestamp);
 #endif
     }
