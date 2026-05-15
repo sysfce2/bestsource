@@ -67,21 +67,10 @@ if meson.get_compiler('cpp').get_linker_id() in ['ld.bfd', 'ld.gold', 'ld.mold']
     link_args += '-Wl,-Bsymbolic'
 endif
 
-incdir = include_directories(
-    run_command(
-        find_program('python', 'python3'),
-        '-c',
-        'import vapoursynth as vs; print(vs.get_include())',
-        check: true,
-    ).stdout().strip(),
-    'AviSynthPlus/avs_core/include'
-)
-
-
 bestsource = library('bestsource',
     sources,
     dependencies: deps,
-    include_directories: incdir,
+    include_directories: include_directories('vapoursynth/include', 'AviSynthPlus/avs_core/include'),
     install: true,
     install_dir: enable_plugin ? py.get_install_dir() / 'vapoursynth/plugins' : get_option('libdir'),
     link_args: link_args,
