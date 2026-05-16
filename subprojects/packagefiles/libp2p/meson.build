@@ -14,12 +14,6 @@ else
     add_project_arguments('/W0', language: 'cpp')
 endif
 
-if get_option('buildtype') == 'release'
-    if cxx.get_id() == 'clang-cl'
-        add_project_arguments('/clang:-flto', '/clang:-O3', language: 'cpp')
-    endif
-endif
-
 if cxx.get_argument_syntax() == 'gcc'
     sse4_args += '-march=x86-64-v2'
 elif cxx.get_id() == 'clang-cl'
