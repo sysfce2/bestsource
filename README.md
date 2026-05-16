@@ -12,7 +12,6 @@ It can be used as either a C++ library directly or through the combined VapourSy
 
 - FFmpeg 8.1.x and FFmpeg 8.0.x supported. Later releases may or may not work but FFmpeg API breakages are quite common and don't always generate compilation errors. Only `libavcodec`, `libavformat`, `libavutil` libraries are required.
 - xxHash
-- libp2p (already included as submodule)
 
 ### Windows Compilation
 
@@ -24,7 +23,7 @@ Use the latest version of Visual Studio. It should automatically find all the re
 Requires `pkg-config`, `meson` and `ninja-build`.
 
 ```
-git clone https://github.com/vapoursynth/bestsource.git --depth 1 --recurse-submodules --shallow-submodules --remote-submodules
+git clone https://github.com/vapoursynth/bestsource.git --depth 1
 cd bestsource
 meson setup build
 meson compile -C build

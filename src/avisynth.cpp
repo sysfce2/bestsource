@@ -23,7 +23,7 @@
 #include "bsshared.h"
 #include "version.h"
 #include "synthshared.h"
-#include "../AviSynthPlus/avs_core/include/avisynth.h"
+#include <avisynth.h>
 #include <VSHelper4.h>
 #include <vector>
 #include <algorithm>

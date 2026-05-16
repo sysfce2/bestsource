@@ -8,6 +8,20 @@ project('BestSource', 'cpp',
 
 enable_plugin = get_option('enable_plugin')
 
+deps = [
+    dependency('libavcodec', version: '>=62.11.0'),
+    dependency('libavformat', version: '>=62.3.0'),
+    dependency('libavutil', version: '>=60.8.0'),
+    dependency('libp2p'),
+    dependency('libxxhash'),
+]
+
+incdir = []
+
+link_args = []
+
+py = import('python').find_installation(pure: false)
+
 sources = files(
     'src/audiosource.cpp',
     'src/bsshared.cpp',
@@ -16,50 +30,16 @@ sources = files(
 )
 
 if enable_plugin
+    deps += dependency('avisynthplus')
+
+    incdir += include_directories(
+        run_command(py, '-c', 'import vapoursynth as vs; print(vs.get_include())', check: true).stdout().strip(),
+    )
+
     sources += files(
         'src/avisynth.cpp',
         'src/synthshared.cpp',
         'src/vapoursynth.cpp',
-    )
-endif
-
-deps = [
-    dependency('libavcodec', version: '>=62.11.0'),
-    dependency('libavformat', version: '>=62.3.0'),
-    dependency('libavutil', version: '>=60.8.0'),
-    dependency('libxxhash'),
-]
-
-libs = []
-
-link_args = []
-
-p2p_args = []
-
-py = import('python').find_installation(pure: false)
-
-if host_machine.cpu_family().startswith('x86')
-    p2p_args += '-DP2P_SIMD'
-endif
-
-libs += static_library('p2p_main',
-    files(
-        'libp2p/simd/cpuinfo_x86.cpp',
-        'libp2p/simd/p2p_simd.cpp',
-        'libp2p/p2p_api.cpp',
-        'libp2p/v210.cpp',
-    ),
-    cpp_args: p2p_args,
-    gnu_symbol_visibility: 'hidden',
-)
-
-if host_machine.cpu_family().startswith('x86')
-    p2p_args += '-march=x86-64-v2'
-
-    libs += static_library('p2p_sse41',
-        files('libp2p/simd/p2p_sse41.cpp'),
-        cpp_args: p2p_args,
-        gnu_symbol_visibility: 'hidden',
     )
 endif
 
@@ -70,11 +50,10 @@ endif
 bestsource = library('bestsource',
     sources,
     dependencies: deps,
-    include_directories: include_directories('vapoursynth/include', 'AviSynthPlus/avs_core/include'),
+    include_directories: incdir,
     install: true,
-    install_dir: enable_plugin ? py.get_install_dir() / 'vapoursynth/plugins' : get_option('libdir'),
+    install_dir: enable_plugin ? py.get_install_dir() / 'vapoursynth/plugins' : [],
     link_args: link_args,
-    link_with: libs,
 )
 
 if not enable_plugin

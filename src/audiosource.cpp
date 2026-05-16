@@ -26,7 +26,7 @@
 #include <cassert>
 #include <iterator>
 
-#include "../libp2p/p2p_api.h"
+#include <p2p_api.h>
 
 #include <xxhash.h>
 
