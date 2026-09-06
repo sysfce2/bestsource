@@ -273,6 +273,16 @@ bool ReadBSHeader(file_ptr_t &F, bool Video) {
         ReadCompareInt(F, avcodec_version());
 }
 
+bool CloseWrittenFile(file_ptr_t &F) {
+    FILE *fp = F.release();
+    if (!fp)
+        return false;
+    bool Ok = (fflush(fp) == 0) && (ferror(fp) == 0);
+    if (fclose(fp) != 0)
+        Ok = false;
+    return Ok;
+}
+
 bool PlausibleRecordCount(file_ptr_t &F, int64_t Count, size_t MinRecordBytes) {
     if (Count <= 0)
         return false;

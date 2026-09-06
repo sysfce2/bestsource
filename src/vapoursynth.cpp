@@ -74,7 +74,7 @@ static const VSFrame *VS_CC BestVideoSourceGetFrame(int n, int ActivationReason,
                 Src.reset(D->V->GetFrameWithRFF(std::min(n, D->VI.numFrames - 1)));
             } else if (D->FPSNum > 0) {
                 double currentTime = D->V->GetVideoProperties().StartTime +
-                    (double)(std::min(n, D->VI.numFrames - 1) * D->FPSDen) / D->FPSNum;
+                    (double)std::min(n, D->VI.numFrames - 1) * D->FPSDen / D->FPSNum;
                 Src.reset(D->V->GetFrameByTime(currentTime));
             } else {
                 Src.reset(D->V->GetFrame(std::min(n, D->VI.numFrames - 1)));
@@ -131,7 +131,8 @@ static const VSFrame *VS_CC BestVideoSourceGetFrame(int n, int ActivationReason,
         SetSynthFrameProperties(n, Src, *D->V, D->RFFIsUsed, D->V->GetFrameIsTFF(n, D->RFF), D->RotationApplied,
             [Props, vsapi](const char *Name, int64_t V) { vsapi->mapSetInt(Props, Name, V, maAppend); },
             [Props, vsapi](const char *Name, double V) { vsapi->mapSetFloat(Props, Name, V, maAppend); },
-            [Props, vsapi](const char *Name, const char *V, int Size, bool Utf8) { vsapi->mapSetData(Props, Name, V, Size, Utf8 ? dtUtf8 : dtBinary, maAppend); });
+            [Props, vsapi](const char *Name, const char *V, int Size, bool Utf8) { vsapi->mapSetData(Props, Name, V, Size, Utf8 ? dtUtf8 : dtBinary, maAppend); },
+            D->FPSNum > 0 ? D->FPSNum : 0, D->FPSDen);
 
         return Dst;
     }
@@ -360,7 +361,13 @@ static void VS_CC CreateBestVideoSource(const VSMap *In, VSMap *Out, void *, VSC
             vsh::reduceRational(&D->FPSNum, &D->FPSDen);
             D->VI.fpsDen = D->FPSDen;
             D->VI.fpsNum = D->FPSNum;
-            D->VI.numFrames = std::max(1, static_cast<int>((VP.Duration * D->VI.fpsNum) * VP.TimeBase.ToDouble() / D->VI.fpsDen + 0.5));
+            /* Computed in double so the rate components, both accepted as 64 bit, cannot overflow
+               an int64 product before the timebase scales it down; int64ToIntS then rejects a
+               count too large for the node rather than letting it wrap. */
+            const double FrameCount = static_cast<double>(VP.Duration) * VP.TimeBase.ToDouble() * static_cast<double>(D->VI.fpsNum) / static_cast<double>(D->VI.fpsDen) + 0.5;
+            if (FrameCount >= 9223372036854775807.0)
+                throw BestSourceException("The requested frame rate produces too many output frames");
+            D->VI.numFrames = vsh::int64ToIntS(std::max<int64_t>(1, static_cast<int64_t>(FrameCount)));
         } else if (D->RFF) {
             D->VI.numFrames = vsh::int64ToIntS(VP.NumRFFFrames);
         }

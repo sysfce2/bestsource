@@ -206,6 +206,7 @@ private:
     std::unique_ptr<LWAudioDecoder> Decoders[MaxAudioDecoders];
     int64_t PreRoll = 40;
     int64_t SampleDelay = 0;
+    int AdjustDelayRequest = -2;
     int64_t FileSize = -1;
     static constexpr size_t RetrySeekAttempts = 10;
     std::set<int64_t> BadSeekLocations;
@@ -216,6 +217,7 @@ private:
     [[nodiscard]] BestAudioFrame *GetFrameLinearInternal(int64_t N, int64_t SeekFrame = -1, size_t Depth = 0, bool ForceUnseeked = false);
     [[nodiscard]] bool IndexTrack(const ProgressFunction &Progress = nullptr);
     void InitializeFormatSets();
+    [[nodiscard]] uint8_t SilenceByte() const;
     void ZeroFillStartPacked(uint8_t *&Data, int64_t &Start, int64_t &Count);
     void ZeroFillEndPacked(uint8_t *Data, int64_t Start, int64_t &Count);
     bool FillInFramePacked(const BestAudioFrame *Frame, int64_t FrameStartSample, uint8_t *&Data, int64_t &Start, int64_t &Count);

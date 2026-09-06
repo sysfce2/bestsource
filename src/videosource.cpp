@@ -2272,7 +2272,7 @@ bool BestVideoSource::WriteVideoTrackIndex(bool AbsolutePath, const std::filesys
         }
     }
 
-    return true;
+    return CloseWrittenFile(F);
 }
 
 bool BestVideoSource::ReadVideoTrackIndex(bool AbsolutePath, const std::filesystem::path &CachePath) {
@@ -2365,6 +2365,13 @@ bool BestVideoSource::ReadVideoTrackIndex(bool AbsolutePath, const std::filesyst
         return false;
     }
 
+    /* A cached format value is only an int; an unusable one has to be rejected here, since the
+       format-set setup that follows feeds it straight to av_pix_fmt_desc_get and dereferences the
+       result. Returning false rebuilds the index instead of crashing on a damaged cache. */
+    for (const auto &FI : Index.Frames)
+        if (!av_pix_fmt_desc_get(static_cast<AVPixelFormat>(FI.Format)) || FI.Width <= 0 || FI.Height <= 0)
+            return false;
+
     TrackIndex = std::move(Index);
     return true;
 }
@@ -2395,13 +2402,17 @@ void BestVideoSource::WriteTimecodes(const std::filesystem::path &TimecodeFile) 
     if (!F)
         throw BestSourceException("Couldn't open timecode file for writing");
 
-    fprintf(F.get(), "# timecode format v2\n");
+    if (fprintf(F.get(), "# timecode format v2\n") < 0)
+        throw BestSourceException("Failed to write timecode file");
     for (const auto &Iter : TrackIndex.Frames) {
         double timestamp = ((Iter.PTS * VP.TimeBase.Num) / (double)VP.TimeBase.Den) * 1000;
         char buffer[100];
         auto res = std::to_chars(buffer, buffer + sizeof(buffer), timestamp, std::chars_format::fixed, 2);
-        fprintf(F.get(), "%s\n", std::string(buffer, res.ptr - buffer).c_str());
+        if (fprintf(F.get(), "%s\n", std::string(buffer, res.ptr - buffer).c_str()) < 0)
+            throw BestSourceException("Failed to write timecode file");
     }
+    if (!CloseWrittenFile(F))
+        throw BestSourceException("Failed to write timecode file");
 }
 
 const BestVideoSource::FrameInfo &BestVideoSource::GetFrameInfo(int64_t N) const {

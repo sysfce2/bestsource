@@ -25,7 +25,7 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
-void SetSynthFrameProperties(int n, const std::unique_ptr<BestVideoFrame> &Src, const BestVideoSource &VS, bool RFF, bool TFF, bool RotationApplied, const std::function<void(const char *, int64_t)> &mapSetInt, const std::function<void(const char *, double)> &mapSetFloat, const std::function<void(const char *, const char *, int, bool)> &mapSetData) {
+void SetSynthFrameProperties(int n, const std::unique_ptr<BestVideoFrame> &Src, const BestVideoSource &VS, bool RFF, bool TFF, bool RotationApplied, const std::function<void(const char *, int64_t)> &mapSetInt, const std::function<void(const char *, double)> &mapSetFloat, const std::function<void(const char *, const char *, int, bool)> &mapSetData, int64_t CFRNum, int64_t CFRDen) {
     const BSVideoProperties VP = VS.GetVideoProperties();
 
     // Set AR variables
@@ -56,7 +56,10 @@ void SetSynthFrameProperties(int n, const std::unique_ptr<BestVideoFrame> &Src, 
         mapSetInt("_FieldBased", FieldBased);
         mapSetInt("RepeatField", Src->RepeatPict);
 
-        if (n < VP.NumFrames - 1) {
+        if (CFRNum > 0) {
+            mapSetInt("_DurationNum", CFRDen);
+            mapSetInt("_DurationDen", CFRNum);
+        } else if (n < VP.NumFrames - 1) {
             int64_t NextPTS = VS.GetFrameInfo(n + 1).PTS;
 
             // Leave _Duration unset when it can't be computed reliably, let callers decide

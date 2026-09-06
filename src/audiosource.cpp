@@ -398,13 +398,9 @@ BestAudioSource::BestAudioSource(const std::filesystem::path &SourceFile, int Tr
         }
     }
 
+    AdjustDelayRequest = AjustDelay;
     InitializeFormatSets();
     SelectFormatSet(-1);
-
-    if (AjustDelay >= -1)
-        SampleDelay = static_cast<int64_t>(GetRelativeStartTime(AjustDelay) * AP.SampleRate);
-
-    AP.NumSamples += SampleDelay;
 
     Decoders[0] = std::move(Decoder);
 }
@@ -555,6 +551,13 @@ void BestAudioSource::SelectFormatSet(int Index) {
     AP.ChannelLayout = SrcSet.ChannelLayout;
 
     AP.StartTime = SrcSet.StartTime;
+
+    /* The delay depends on the selected rate, so it is computed here rather than in the
+       constructor: a changing-rate track has no single rate for the default set, and computing it
+       against a zero rate there would silently drop adjustdelay for every selected set. */
+    SampleDelay = 0;
+    if (AdjustDelayRequest >= -1 && AP.SampleRate > 0)
+        SampleDelay = static_cast<int64_t>(GetRelativeStartTime(AdjustDelayRequest) * AP.SampleRate);
 
     AP.NumFrames = SrcSet.NumFrames;
     AP.NumSamples = SrcSet.NumSamples + SampleDelay;
@@ -935,11 +938,17 @@ BestAudioSource::FrameRange BestAudioSource::GetFrameRangeBySamples(int64_t Star
     return Result;
 }
 
+uint8_t BestAudioSource::SilenceByte() const {
+    // Unsigned 8 bit PCM (the only 1-byte sample format) centres silence at 0x80; every wider
+    // format this outputs is signed or float, silent at 0.
+    return AP.AF.BytesPerSample == 1 ? 0x80 : 0;
+}
+
 void BestAudioSource::ZeroFillStartPacked(uint8_t *&Data, int64_t &Start, int64_t &Count) {
     if (Start < 0) {
         int64_t Length = std::min(Count, -Start);
         size_t ByteLength = Length * AP.AF.BytesPerSample * AP.Channels;
-        memset(Data, 0, ByteLength);
+        memset(Data, SilenceByte(), ByteLength);
         Data += ByteLength;
         Start += Length;
         Count -= Length;
@@ -951,7 +960,7 @@ void BestAudioSource::ZeroFillEndPacked(uint8_t *Data, int64_t Start, int64_t &C
     if (Start + Count > DataSamples) {
         int64_t Length = std::min(Start + Count - DataSamples, Count);
         size_t ByteOffset = std::max<int64_t>(DataSamples - Start, 0) * AP.AF.BytesPerSample * AP.Channels;
-        memset(Data + ByteOffset, 0, Length * AP.AF.BytesPerSample * AP.Channels);
+        memset(Data + ByteOffset, SilenceByte(), Length * AP.AF.BytesPerSample * AP.Channels);
         Count -= Length;
     }
 }
@@ -1000,8 +1009,9 @@ void BestAudioSource::ZeroFillStartPlanar(uint8_t *Data[], int64_t &Start, int64
     if (Start < 0) {
         int64_t Length = std::min(Count, -Start);
         size_t ByteLength = Length * AP.AF.BytesPerSample;
+        const uint8_t Silence = SilenceByte();
         for (int i = 0; i < AP.Channels; i++) {
-            memset(Data[i], 0, ByteLength);
+            memset(Data[i], Silence, ByteLength);
             Data[i] += ByteLength;
         }
         Start += Length;
@@ -1014,8 +1024,9 @@ void BestAudioSource::ZeroFillEndPlanar(uint8_t *Data[], int64_t Start, int64_t 
     if (Start + Count > DataSamples) {
         int64_t Length = std::min(Start + Count - DataSamples, Count);
         size_t ByteOffset = std::max<int64_t>(DataSamples - Start, 0) * AP.AF.BytesPerSample;
+        const uint8_t Silence = SilenceByte();
         for (int i = 0; i < AP.Channels; i++)
-            memset(Data[i] + ByteOffset, 0, Length * AP.AF.BytesPerSample);
+            memset(Data[i] + ByteOffset, Silence, Length * AP.AF.BytesPerSample);
         Count -= Length;
     }
 }
@@ -1219,7 +1230,7 @@ bool BestAudioSource::WriteAudioTrackIndex(bool AbsolutePath, const std::filesys
         }
     }
 
-    return true;
+    return CloseWrittenFile(F);
 }
 
 bool BestAudioSource::ReadAudioTrackIndex(bool AbsolutePath, const std::filesystem::path &CachePath) {

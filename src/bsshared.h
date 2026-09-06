@@ -100,6 +100,7 @@ bool ReadCompareInt64(file_ptr_t &F, int64_t Value);
 bool ReadCompareDouble(file_ptr_t &F, double Value);
 bool ReadBSHeader(file_ptr_t &F, bool Video);
 bool PlausibleRecordCount(file_ptr_t &F, int64_t Count, size_t MinRecordBytes);
+bool CloseWrittenFile(file_ptr_t &F);
 
 /* Maps a selected format set's frame numbers to positions in the full track index. Choosing one
    set out of several drops the other frames, so the selected numbering the caller uses no longer

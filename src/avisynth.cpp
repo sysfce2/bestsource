@@ -196,7 +196,10 @@ public:
             if (FPSNum > 0) {
                 vsh::reduceRational(&FPSNum, &FPSDen);
                 VI.SetFPS(static_cast<int>(FPSNum), static_cast<int>(FPSDen));
-                VI.num_frames = std::max(1, static_cast<int>((VP.Duration * VI.fps_numerator) * VP.TimeBase.ToDouble() / VI.fps_denominator + 0.5));
+                const double FrameCount = static_cast<double>(VP.Duration) * VP.TimeBase.ToDouble() * static_cast<double>(VI.fps_numerator) / static_cast<double>(VI.fps_denominator) + 0.5;
+                if (FrameCount >= 9223372036854775807.0)
+                    Env->ThrowError("BestVideoSource: the requested frame rate produces too many output frames");
+                VI.num_frames = vsh::int64ToIntS(std::max<int64_t>(1, static_cast<int64_t>(FrameCount)));
             } else if (RFF) {
                 VI.num_frames = vsh::int64ToIntS(VP.NumRFFFrames);
             }
@@ -244,7 +247,7 @@ public:
                 Src.reset(V->GetFrameWithRFF(std::min(n, VI.num_frames - 1)));
             } else if (FPSNum > 0) {
                 double currentTime = V->GetVideoProperties().StartTime +
-                    (double)(std::min(n, VI.num_frames - 1) * FPSDen) / FPSNum;
+                    (double)std::min(n, VI.num_frames - 1) * FPSDen / FPSNum;
                 Src.reset(V->GetFrameByTime(currentTime));
             } else {
                 Src.reset(V->GetFrame(std::min(n, VI.num_frames - 1)));
@@ -294,7 +297,8 @@ public:
         SetSynthFrameProperties(n, Src, *V, RFFIsUsed, V->GetFrameIsTFF(n, RFF), ApplyRotation,
             [Props, Env](const char *Name, int64_t V) { Env->propSetInt(Props, Name, V, 1); },
             [Props, Env](const char *Name, double V) { Env->propSetFloat(Props, Name, V, 1); },
-            [Props, Env](const char *Name, const char *V, int Size, bool Utf8) { Env->propSetData(Props, Name, V, Size, 1); });
+            [Props, Env](const char *Name, const char *V, int Size, bool Utf8) { Env->propSetData(Props, Name, V, Size, 1); },
+            FPSNum > 0 ? FPSNum : 0, FPSDen);
 
         return Dst;
     }
