@@ -1612,6 +1612,10 @@ namespace {
             /* Set only while the entry is demoted: the pool the pixels came from, and the one
                Materialize returns them to. */
             AVBufferRef *FramesCtx;
+            /* The visible size, kept while demoted because the readback holds the pool's larger
+               padded size (see DemoteTail) and Materialize must restore this. */
+            int VisibleWidth;
+            int VisibleHeight;
             std::array<uint8_t, HashSize> Hash;
         };
         std::vector<Entry> Data;
@@ -1620,9 +1624,26 @@ namespace {
             if (Data.empty() || Data.back().Frame->format != AV_PIX_FMT_VULKAN)
                 return true;
             Entry &E = Data.back();
+            AVHWFramesContext *FC = reinterpret_cast<AVHWFramesContext *>(E.Frame->hw_frames_ctx->data);
+            E.VisibleWidth = E.Frame->width;
+            E.VisibleHeight = E.Frame->height;
             AVFrame *Sw = av_frame_alloc();
             if (!Sw)
                 return false;
+            /* The readback is sized to the pool's own (padded) dimensions, not the visible ones,
+               so that both this download and the upload in Materialize cover the whole image.
+               FFmpeg derives the transfer's copy extent from this frame's size, and an extent
+               equal to the full image subresource is what satisfies the queue's transfer
+               granularity when the visible height is not a multiple of it -- otherwise the upload
+               of a, say, 1080-row region into a 1088-row pool image is an invalid partial copy.
+               The visible size is restored on the way back. */
+            Sw->format = FC->sw_format;
+            Sw->width = FC->width;
+            Sw->height = FC->height;
+            if (av_frame_get_buffer(Sw, 0) < 0) {
+                av_frame_free(&Sw);
+                return false;
+            }
             if (av_hwframe_transfer_data(Sw, E.Frame, 0) < 0) {
                 av_frame_free(&Sw);
                 return false;
@@ -1654,7 +1675,7 @@ namespace {
                 av_frame_free(&F);
                 return false;
             }
-            Data.push_back({ F, nullptr, Hash });
+            Data.push_back({ F, nullptr, 0, 0, Hash });
             return true;
         }
 
@@ -1672,15 +1693,17 @@ namespace {
                 av_frame_free(&Hw);
                 return false;
             }
-            /* The pool hands out its own, aligned size; the frame keeps the size it was demoted
-               with, which is what the index and every consumer describe. */
-            Hw->width = E.Frame->width;
-            Hw->height = E.Frame->height;
+            /* Upload the padded readback into the fresh pool frame: both are the pool's size, so
+               the copy fills the image and respects the transfer granularity. */
             if (av_hwframe_transfer_data(Hw, E.Frame, 0) < 0) {
                 av_frame_free(&Hw);
                 return false;
             }
             av_frame_copy_props(Hw, E.Frame);
+            /* Restore the visible size the index and every consumer describe; the pool frame came
+               out at the larger padded size. */
+            Hw->width = E.VisibleWidth;
+            Hw->height = E.VisibleHeight;
             av_frame_free(&E.Frame);
             av_buffer_unref(&E.FramesCtx);
             E.Frame = Hw;

@@ -25,6 +25,7 @@
    not change shape with the build option. Only the implementation is conditional. */
 #if BS_GPU
 
+#include <cassert>
 #include <mutex>
 #include <string>
 
@@ -648,21 +649,17 @@ uint64_t BSGpuHasher::Impl::RunDispatch(const DispatchSource *Sources, int NumSo
     const int BytesPerSample = (Depth > 8) ? 2 : 1;
     const VkFormat *PlaneFmts = av_vkfmt_from_pixfmt(Frames->sw_format);
 
-    /* Every source writes into one destination, so they have to agree on geometry. Distinct images
-       matter too: the submission below waits on and signals each source's timeline once, and doing
-       that twice for the same semaphore in one submit is not a legal thing to ask for. */
+    /* One source per dispatch: a field merge issues two of these instead of locking two frames
+       at once. Holding at most one FFmpeg frame lock is what keeps this deadlock-free against the
+       decoder, which locks its reference frames in DPB-slot order -- an order nothing here can
+       match, so the only safe answer is never to hold two. */
+    assert(NumSources == 1);
     AVVkFrame *Vkf[MaxDispatchSources] = {};
     AVHWFramesContext *FC[MaxDispatchSources] = {};
     for (int s = 0; s < NumSources; s++) {
         const AVFrame *F = Sources[s].Frame;
         FC[s] = reinterpret_cast<AVHWFramesContext *>(F->hw_frames_ctx->data);
-        if (F->width != Frame->width || F->height != Frame->height || FC[s]->sw_format != Frames->sw_format ||
-            F->crop_left != Frame->crop_left || F->crop_top != Frame->crop_top)
-            throw BestSourceHWDecoderException("GPU export: merged frames must have the same format and size");
         Vkf[s] = reinterpret_cast<AVVkFrame *>(F->data[0]);
-        for (int t = 0; t < s; t++)
-            if (Vkf[t] == Vkf[s])
-                throw BestSourceHWDecoderException("GPU export: merged frames must be distinct images");
     }
 
     BSHashExportPushConstants PC = {
@@ -743,27 +740,18 @@ uint64_t BSGpuHasher::Impl::RunDispatch(const DispatchSource *Sources, int NumSo
        when they add these frames as decode references, so without it the two race over
        sem_value and layout. Address order, so two merges holding each other's frames cannot
        deadlock. */
-    int LockOrder[MaxDispatchSources] = { 0, 1 };
-    if (NumSources > 1 && reinterpret_cast<uintptr_t>(Vkf[1]) < reinterpret_cast<uintptr_t>(Vkf[0])) {
-        LockOrder[0] = 1;
-        LockOrder[1] = 0;
-    }
     bool FramesLocked = false;
     auto LockFrames = [&]() {
-        for (int i = 0; i < NumSources; i++) {
-            const int s = LockOrder[i];
+        for (int s = 0; s < NumSources; s++)
             reinterpret_cast<AVVulkanFramesContext *>(FC[s]->hwctx)->lock_frame(FC[s], Vkf[s]);
-        }
         FramesLocked = true;
     };
     auto UnlockFrames = [&]() {
         if (!FramesLocked)
             return;
         FramesLocked = false;
-        for (int i = NumSources - 1; i >= 0; i--) {
-            const int s = LockOrder[i];
+        for (int s = NumSources - 1; s >= 0; s--)
             reinterpret_cast<AVVulkanFramesContext *>(FC[s]->hwctx)->unlock_frame(FC[s], Vkf[s]);
-        }
     };
 
     uint64_t Result = 0;
@@ -1043,9 +1031,18 @@ void BSGpuHasher::ExportMergedFieldsAsPlanarGPU(const AVFrame *EvenRows, const A
         throw BestSourceHWDecoderException("GPU export: unsupported frame");
     if (!Targets)
         throw BestSourceHWDecoderException("GPU export: no plane targets");
-    const DispatchSource Sources[2] = { { EvenRows, 0, 2 }, { OddRows, 1, 2 } };
+    if (EvenRows->width != OddRows->width || EvenRows->height != OddRows->height ||
+        EvenRows->crop_left != OddRows->crop_left || EvenRows->crop_top != OddRows->crop_top)
+        throw BestSourceHWDecoderException("GPU export: merged frames must have the same size");
+    /* Two independent single-frame submissions writing disjoint rows of the destination, rather
+       than one submission holding both frames' locks. The consumer's timeline is signalled only
+       by the second; on one queue its completion implies the first's, so a wait on it sees both
+       fields. */
+    const DispatchSource Even = { EvenRows, 0, 2 };
+    const DispatchSource Odd = { OddRows, 1, 2 };
     std::lock_guard<std::mutex> Lock(P->Mutex);
-    (void)P->RunDispatch(Sources, 2, Width, Height, Targets, SignalTimeline, SignalValue);
+    (void)P->RunDispatch(&Even, 1, Width, Height, Targets, VK_NULL_HANDLE, 0);
+    (void)P->RunDispatch(&Odd, 1, Width, Height, Targets, SignalTimeline, SignalValue);
 }
 
 void BSGpuHasher::FinishExports() {
