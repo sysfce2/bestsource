@@ -531,6 +531,22 @@ void BestAudioSource::SelectFormatSet(int Index) {
     VariableFormat = Index;
     BestAudioSource::FormatSet &SrcSet = (Index < 0) ? DefaultFormatSet : FormatSets[Index];
 
+    /* The selected->original mapping and the selected timeline's cumulative sample starts, so a
+       frame request and a sample-range lookup both stay on the selected numbering. Identity (both
+       empty) unless a specific set is chosen out of several. */
+    SelectedFrames = BuildSelectedFrameMapping(TrackIndex.Frames, Index >= 0 && FormatSets.size() > 1,
+        [&](const FrameInfo &FI) { return FI.Format == SrcSet.Format && FI.BitsPerSample == SrcSet.BitsPerSample && FI.SampleRate == SrcSet.SampleRate && FI.Channels == SrcSet.Channels && FI.ChannelLayout == SrcSet.ChannelLayout; });
+    SelectedSampleStart.clear();
+    if (!SelectedFrames.empty()) {
+        SelectedSampleStart.resize(SelectedFrames.size() + 1);
+        int64_t Acc = 0;
+        for (size_t k = 0; k < SelectedFrames.size(); k++) {
+            SelectedSampleStart[k] = Acc;
+            Acc += TrackIndex.Frames[SelectedFrames[k]].Length;
+        }
+        SelectedSampleStart[SelectedFrames.size()] = Acc;
+    }
+
     AP.AF = SrcSet.AF;
     AP.Format = SrcSet.Format;
     AP.BitsPerSample = SrcSet.BitsPerSample;
@@ -559,20 +575,7 @@ BestAudioFrame *BestAudioSource::GetFrame(int64_t N, bool Linear) {
     if (N < 0 || N >= AP.NumFrames)
         return nullptr;
 
-    // Adjust frame number if an output format is chosen
-    if (VariableFormat >= 0 && FormatSets.size() > 1) {
-        const auto &ActiveSet = FormatSets[VariableFormat];
-        int64_t UsableFrames = 0;
-        int64_t SourceN = N;
-        for (const auto &Iter : TrackIndex.Frames) {
-            if (Iter.Format != ActiveSet.Format || Iter.BitsPerSample != ActiveSet.BitsPerSample || Iter.SampleRate != ActiveSet.SampleRate || Iter.Channels != ActiveSet.Channels || Iter.ChannelLayout != ActiveSet.ChannelLayout) {
-                N++;
-            } else {
-                if (UsableFrames++ == SourceN)
-                    break;
-            }
-        }
-    }
+    N = GetOriginalFrameNumber(N);
 
     std::unique_ptr<BestAudioFrame> F(FrameCache.GetFrame(N));
     if (!F)
@@ -898,13 +901,26 @@ BestAudioSource::FrameRange BestAudioSource::GetFrameRangeBySamples(int64_t Star
     if (Count <= 0 || Start >= DataSamples)
         return Result;
 
-    auto FrameAt = [this](int64_t Pos) -> int64_t {
-        auto It = std::upper_bound(TrackIndex.Frames.begin(), TrackIndex.Frames.end(), Pos,
-            [](int64_t P, const FrameInfo &F) { return P < F.Start; });
-        if (It == TrackIndex.Frames.begin())
+    /* The selected timeline: its own numbering and cumulative sample starts when a set is chosen,
+       the full index otherwise (where selected and full coincide). Frame numbers returned here are
+       selected numbers, which GetFrame maps back; searching the full index instead would return
+       positions the selected output does not have. */
+    const bool Sel = !SelectedFrames.empty();
+    auto StartOf = [&](int64_t k) { return Sel ? SelectedSampleStart[k] : TrackIndex.Frames[k].Start; };
+    auto EndOf = [&](int64_t k) { return Sel ? SelectedSampleStart[k + 1] : TrackIndex.Frames[k].Start + TrackIndex.Frames[k].Length; };
+    auto FrameAt = [&](int64_t Pos) -> int64_t {
+        int64_t Lo = 0, Hi = AP.NumFrames;
+        while (Lo < Hi) {
+            int64_t Mid = Lo + (Hi - Lo) / 2;
+            if (StartOf(Mid) <= Pos)
+                Lo = Mid + 1;
+            else
+                Hi = Mid;
+        }
+        const int64_t k = Lo - 1;
+        if (k < 0)
             return -1;
-        --It;
-        return (Pos < It->Start + It->Length) ? static_cast<int64_t>(It - TrackIndex.Frames.begin()) : -1;
+        return (Pos < EndOf(k)) ? k : -1;
     };
 
     Result.First = (Start < 0) ? 0 : FrameAt(Start);
@@ -914,7 +930,7 @@ BestAudioSource::FrameRange BestAudioSource::GetFrameRangeBySamples(int64_t Star
 
     assert(Result.First >= 0 && Result.Last >= 0);
 
-    Result.FirstSamplePos = TrackIndex.Frames[Result.First].Start;
+    Result.FirstSamplePos = StartOf(Result.First);
 
     return Result;
 }
@@ -1299,6 +1315,10 @@ bool BestAudioSource::ReadAudioTrackIndex(bool AbsolutePath, const std::filesyst
     TrackIndex = std::move(Index);
     AP.NumSamples = NumSamples;
     return true;
+}
+
+int64_t BestAudioSource::GetOriginalFrameNumber(int64_t N) const {
+    return SelectedFrames.empty() ? N : SelectedFrames[N];
 }
 
 const BestAudioSource::FrameInfo &BestAudioSource::GetFrameInfo(int64_t N) const {

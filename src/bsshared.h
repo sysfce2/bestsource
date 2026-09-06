@@ -27,6 +27,8 @@
 #include <stdexcept>
 #include <functional>
 #include <filesystem>
+#include <vector>
+#include <cstdint>
 
 constexpr size_t HashSize = 8;
 
@@ -98,5 +100,24 @@ bool ReadCompareInt64(file_ptr_t &F, int64_t Value);
 bool ReadCompareDouble(file_ptr_t &F, double Value);
 bool ReadBSHeader(file_ptr_t &F, bool Video);
 bool PlausibleRecordCount(file_ptr_t &F, int64_t Count, size_t MinRecordBytes);
+
+/* Maps a selected format set's frame numbers to positions in the full track index. Choosing one
+   set out of several drops the other frames, so the selected numbering the caller uses no longer
+   lines up with the index; this records the correspondence once, when the set is selected, so
+   every lookup is O(1) and every caller agrees on it instead of rescanning the whole index (and
+   disagreeing about which numbering it produced). Returned empty when there is nothing to remap
+   -- no selection, or a single format set -- which callers read as the identity mapping. Match
+   decides which index frames belong to the selected set. */
+template<typename FrameVec, typename MatchFn>
+std::vector<int64_t> BuildSelectedFrameMapping(const FrameVec &Frames, bool Active, MatchFn Match) {
+    std::vector<int64_t> Map;
+    if (!Active)
+        return Map;
+    Map.reserve(Frames.size());
+    for (int64_t i = 0; i < static_cast<int64_t>(Frames.size()); i++)
+        if (Match(Frames[i]))
+            Map.push_back(i);
+    return Map;
+}
 
 #endif

@@ -1546,22 +1546,7 @@ const BSVideoProperties &BestVideoSource::GetVideoProperties() const {
 }
 
 [[nodiscard]] int64_t BestVideoSource::GetOriginalFrameNumber(int64_t N) const {
-    // Adjust frame number if an output format is chosen
-    if (VariableFormat >= 0 && FormatSets.size() > 1) {
-        const auto &ActiveSet = FormatSets[VariableFormat];
-        int64_t UsableFrames = 0;
-        int64_t SourceN = N;
-        for (const auto &Iter : TrackIndex.Frames) {
-            if (Iter.Format != ActiveSet.Format || Iter.Width != ActiveSet.Width || Iter.Height != ActiveSet.Height) {
-                N++;
-            } else {
-                if (UsableFrames++ == SourceN)
-                    break;
-            }
-        }
-    }
-
-    return N;
+    return SelectedFrames.empty() ? N : SelectedFrames[N];
 }
 
 // Short algorithm summary
@@ -2126,16 +2111,27 @@ BestVideoFrame *BestVideoSource::GetFrameByTime(double Time, bool Linear) {
         throw BestSourceException("Can't get frame by time, file has frames with unknown timestamps");
 
     int64_t PTS = static_cast<int64_t>(((Time * VP.TimeBase.Den) / VP.TimeBase.Num) + .001);
-    FrameInfo F{ PTS };
 
-    auto Pos = std::lower_bound(TrackIndex.Frames.begin(), TrackIndex.Frames.end(), F, [](const FrameInfo &FI1, const FrameInfo &FI2) { return FI1.PTS < FI2.PTS; });
-
-    if (Pos == TrackIndex.Frames.end())
-        return GetFrame(TrackIndex.Frames.size() - 1, Linear);
-    size_t Frame = std::distance(TrackIndex.Frames.begin(), Pos);
-    if (Pos == TrackIndex.Frames.begin() || std::abs(Pos->PTS - PTS) <= std::abs((Pos - 1)->PTS - PTS))
-        return GetFrame(Frame, Linear);
-    return GetFrame(Frame - 1, Linear);
+    /* Searched over the selected timeline, so the nearest frame is one this output actually has
+       and its number is already what GetFrame expects. Selected frame PTS stay in index order,
+       so a binary search still applies; GetOriginalFrameNumber is the O(1) mapping. */
+    const int64_t Count = VP.NumFrames;
+    if (Count <= 0)
+        return nullptr;
+    auto FramePTS = [&](int64_t Sel) { return TrackIndex.Frames[GetOriginalFrameNumber(Sel)].PTS; };
+    int64_t Lo = 0, Hi = Count;
+    while (Lo < Hi) {
+        int64_t Mid = Lo + (Hi - Lo) / 2;
+        if (FramePTS(Mid) < PTS)
+            Lo = Mid + 1;
+        else
+            Hi = Mid;
+    }
+    if (Lo == Count)
+        return GetFrame(Count - 1, Linear);
+    if (Lo == 0 || std::abs(FramePTS(Lo) - PTS) <= std::abs(FramePTS(Lo - 1) - PTS))
+        return GetFrame(Lo, Linear);
+    return GetFrame(Lo - 1, Linear);
 }
 
 const std::vector<BestVideoSource::FormatSet> &BestVideoSource::GetFormatSets() const {
@@ -2152,6 +2148,11 @@ void BestVideoSource::SelectFormatSet(int Index) {
 
     VariableFormat = Index;
     BestVideoSource::FormatSet &SrcSet = (Index < 0) ? DefaultFormatSet : FormatSets[Index];
+
+    /* The mapping every frame request goes through; identity unless a specific set is chosen out
+       of several. Built here so a rescan never happens per request. */
+    SelectedFrames = BuildSelectedFrameMapping(TrackIndex.Frames, Index >= 0 && FormatSets.size() > 1,
+        [&](const FrameInfo &FI) { return FI.Format == SrcSet.Format && FI.Width == SrcSet.Width && FI.Height == SrcSet.Height; });
 
     VP.VF = SrcSet.VF;
     VP.Format = SrcSet.Format;

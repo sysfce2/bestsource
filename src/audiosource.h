@@ -194,6 +194,11 @@ private:
     std::filesystem::path Source;
     int AudioTrack;
     int VariableFormat = -1;
+    /* Selected frame number -> position in TrackIndex.Frames, and the selected timeline's
+       cumulative sample start per selected frame (size+1, last = total). Both empty is the
+       identity mapping. See BuildSelectedFrameMapping. */
+    std::vector<int64_t> SelectedFrames;
+    std::vector<int64_t> SelectedSampleStart;
     int Threads;
     bool LinearMode = false;
     uint64_t DecoderSequenceNum = 0;
@@ -232,6 +237,7 @@ public:
     [[nodiscard]] const BSAudioProperties &GetAudioProperties() const;
     [[nodiscard]] const std::vector<FormatSet> &GetFormatSets() const; /* Get a listing of all the number of formats  */
     void SelectFormatSet(int Index); /* Sets the output format to the specified format set, passing -1 means the default variable format will be used */
+    [[nodiscard]] int64_t GetOriginalFrameNumber(int64_t N) const;
     [[nodiscard]] BestAudioFrame *GetFrame(int64_t N, bool Linear = false);
     [[nodiscard]] FrameRange GetFrameRangeBySamples(int64_t Start, int64_t Count) const;
     void GetPackedAudio(uint8_t *Data, int64_t Start, int64_t Count);

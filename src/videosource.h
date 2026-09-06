@@ -348,6 +348,9 @@ private:
     std::optional<std::array<uint8_t, 16>> DeviceUUID;
     int VideoTrack;
     int VariableFormat = -1;
+    /* Selected frame number -> position in TrackIndex.Frames; empty is the identity mapping.
+       See BuildSelectedFrameMapping. */
+    std::vector<int64_t> SelectedFrames;
     int ViewID;
     int Threads;
     bool CanSeekByTime = true;
