@@ -362,12 +362,13 @@ static void VS_CC CreateBestVideoSource(const VSMap *In, VSMap *Out, void *, VSC
             D->VI.fpsDen = D->FPSDen;
             D->VI.fpsNum = D->FPSNum;
             /* Computed in double so the rate components, both accepted as 64 bit, cannot overflow
-               an int64 product before the timebase scales it down; int64ToIntS then rejects a
-               count too large for the node rather than letting it wrap. */
+               an int64 product before the timebase scales it down. Checked against the node's int
+               frame count because that is the narrowing that matters: a rate yielding billions of
+               frames is a mistake to report, not a clip to silently saturate. */
             const double FrameCount = static_cast<double>(VP.Duration) * VP.TimeBase.ToDouble() * static_cast<double>(D->VI.fpsNum) / static_cast<double>(D->VI.fpsDen) + 0.5;
-            if (FrameCount >= 9223372036854775807.0)
+            if (FrameCount > static_cast<double>(std::numeric_limits<int>::max()))
                 throw BestSourceException("The requested frame rate produces too many output frames");
-            D->VI.numFrames = vsh::int64ToIntS(std::max<int64_t>(1, static_cast<int64_t>(FrameCount)));
+            D->VI.numFrames = static_cast<int>(std::max(1.0, FrameCount));
         } else if (D->RFF) {
             D->VI.numFrames = vsh::int64ToIntS(VP.NumRFFFrames);
         }

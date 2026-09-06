@@ -207,6 +207,13 @@ private:
     int64_t PreRoll = 40;
     int64_t SampleDelay = 0;
     int AdjustDelayRequest = -2;
+    /* GetRelativeStartTime's probe of the reference track, cached because opening the file and
+       decoding its first frame is invariant for a given track while SelectFormatSet recomputes
+       the delay on every selection. */
+    mutable bool ProbedStartDone = false;
+    mutable int ProbedStartTrack = 0;
+    mutable bool ProbedStartValid = false;
+    mutable double ProbedStartTime = 0;
     int64_t FileSize = -1;
     static constexpr size_t RetrySeekAttempts = 10;
     std::set<int64_t> BadSeekLocations;

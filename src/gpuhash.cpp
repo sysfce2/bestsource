@@ -738,8 +738,8 @@ uint64_t BSGpuHasher::Impl::RunDispatch(const DispatchSource *Sources, int NumSo
        new state has been published after submission, and never across the host wait: that is
        the contract in hwcontext_vulkan.h, and the decoder's worker threads take the same lock
        when they add these frames as decode references, so without it the two race over
-       sem_value and layout. Address order, so two merges holding each other's frames cannot
-       deadlock. */
+       sem_value and layout. At most one frame's lock is ever held (the invariant asserted at
+       the top), so no cycle with the decoder's own multi-frame acquisitions can form. */
     bool FramesLocked = false;
     auto LockFrames = [&]() {
         for (int s = 0; s < NumSources; s++)
@@ -1032,8 +1032,10 @@ void BSGpuHasher::ExportMergedFieldsAsPlanarGPU(const AVFrame *EvenRows, const A
     if (!Targets)
         throw BestSourceHWDecoderException("GPU export: no plane targets");
     if (EvenRows->width != OddRows->width || EvenRows->height != OddRows->height ||
-        EvenRows->crop_left != OddRows->crop_left || EvenRows->crop_top != OddRows->crop_top)
-        throw BestSourceHWDecoderException("GPU export: merged frames must have the same size");
+        EvenRows->crop_left != OddRows->crop_left || EvenRows->crop_top != OddRows->crop_top ||
+        reinterpret_cast<const AVHWFramesContext *>(EvenRows->hw_frames_ctx->data)->sw_format !=
+        reinterpret_cast<const AVHWFramesContext *>(OddRows->hw_frames_ctx->data)->sw_format)
+        throw BestSourceHWDecoderException("GPU export: merged frames must have the same format and size");
     /* Two independent single-frame submissions writing disjoint rows of the destination, rather
        than one submission holding both frames' locks. The consumer's timeline is signalled only
        by the second; on one queue its completion implies the first's, so a wait on it sees both

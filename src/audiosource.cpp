@@ -500,17 +500,25 @@ void BestAudioSource::InitializeFormatSets() {
 }
 
 double BestAudioSource::GetRelativeStartTime(int Track) const {
-    try {
-        std::unique_ptr<LWVideoDecoder> Dec(new LWVideoDecoder(Source, false, {}, Track, 0, 0, LAVFOptions));
-        AVFrame *F = Dec->GetNextFrame();
-        int64_t PTS = (F && F->pts != AV_NOPTS_VALUE) ? F->pts : 0;
-        av_frame_free(&F);
-        LWVideoProperties VP;
-        Dec->GetVideoProperties(VP);
-        return AP.StartTime - (static_cast<double>(VP.TimeBase.Num) * PTS) / VP.TimeBase.Den;
-    } catch (BestSourceException &) {
+    if (!ProbedStartDone || ProbedStartTrack != Track) {
+        ProbedStartDone = true;
+        ProbedStartTrack = Track;
+        ProbedStartValid = false;
+        try {
+            std::unique_ptr<LWVideoDecoder> Dec(new LWVideoDecoder(Source, false, {}, Track, 0, 0, LAVFOptions));
+            AVFrame *F = Dec->GetNextFrame();
+            int64_t PTS = (F && F->pts != AV_NOPTS_VALUE) ? F->pts : 0;
+            av_frame_free(&F);
+            LWVideoProperties VP;
+            Dec->GetVideoProperties(VP);
+            ProbedStartTime = (static_cast<double>(VP.TimeBase.Num) * PTS) / VP.TimeBase.Den;
+            ProbedStartValid = true;
+        } catch (BestSourceException &) {
+        }
     }
-    return 0;
+    /* A failed probe means no usable reference track and therefore no delay, matching the old
+       behavior of returning 0 outright rather than the audio start alone. */
+    return ProbedStartValid ? (AP.StartTime - ProbedStartTime) : 0;
 }
 
 const BSAudioProperties &BestAudioSource::GetAudioProperties() const {

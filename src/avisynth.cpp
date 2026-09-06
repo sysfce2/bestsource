@@ -197,9 +197,9 @@ public:
                 vsh::reduceRational(&FPSNum, &FPSDen);
                 VI.SetFPS(static_cast<int>(FPSNum), static_cast<int>(FPSDen));
                 const double FrameCount = static_cast<double>(VP.Duration) * VP.TimeBase.ToDouble() * static_cast<double>(VI.fps_numerator) / static_cast<double>(VI.fps_denominator) + 0.5;
-                if (FrameCount >= 9223372036854775807.0)
+                if (FrameCount > static_cast<double>(std::numeric_limits<int>::max()))
                     Env->ThrowError("BestVideoSource: the requested frame rate produces too many output frames");
-                VI.num_frames = vsh::int64ToIntS(std::max<int64_t>(1, static_cast<int64_t>(FrameCount)));
+                VI.num_frames = static_cast<int>(std::max(1.0, FrameCount));
             } else if (RFF) {
                 VI.num_frames = vsh::int64ToIntS(VP.NumRFFFrames);
             }
