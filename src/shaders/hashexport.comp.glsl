@@ -131,6 +131,10 @@ layout (push_constant, scalar) uniform Push {
      * subsampled chroma by parity. */
     int   row_offset;
     int   row_step;
+    /* Where the visible picture starts in the source image, per plane in that plane's samples.
+     * Nonzero only for an export of a frame whose decoder left a left or top crop unapplied. */
+    ivec2 src_luma;
+    ivec2 src_chroma;
 } pc;
 
 /* NOTE: nothing position-dependent may enter the hash -- no frame number, no PTS. SeekAndDecode
@@ -181,8 +185,8 @@ void main()
         if (any(greaterThanEqual(pos, size)))
             break;
 
-        const uvec4 texel = (plane == 0) ? imageLoad(src_luma, pos)
-                                         : imageLoad(src_chroma, pos);
+        const uvec4 texel = (plane == 0) ? imageLoad(src_luma, pos + pc.src_luma)
+                                         : imageLoad(src_chroma, pos + pc.src_chroma);
 
         if (do_export != 0) {
             if (plane == 0) {

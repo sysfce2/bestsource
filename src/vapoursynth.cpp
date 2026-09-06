@@ -84,7 +84,8 @@ static const VSFrame *VS_CC BestVideoSourceGetFrame(int n, int ActivationReason,
                 throw BestSourceException("No frame returned for frame number " + std::to_string(n) + ". This may be due to an FFmpeg bug. Retry with threads=1 if not already set.");
 
             VSVideoFormat VideoFormat = {};
-            vsapi->queryVideoFormat(&VideoFormat, Src->VF.ColorFamily, Src->VF.Float ? stFloat : stInteger, Src->VF.Bits, Src->VF.SubSamplingW, Src->VF.SubSamplingH, Core);
+            if (!vsapi->queryVideoFormat(&VideoFormat, Src->VF.ColorFamily, Src->VF.Float ? stFloat : stInteger, Src->VF.Bits, Src->VF.SubSamplingW, Src->VF.SubSamplingH, Core))
+                throw BestSourceException("Unsupported video format from decoder in frame " + std::to_string(n) + " (probably less than 8 bit or palette)");
             VSVideoFormat AlphaFormat = {};
             vsapi->queryVideoFormat(&AlphaFormat, cfGray, VideoFormat.sampleType, VideoFormat.bitsPerSample, 0, 0, Core);
 
@@ -332,10 +333,19 @@ static void VS_CC CreateBestVideoSource(const VSMap *In, VSMap *Out, void *, VSC
         const BSVideoProperties &VP = D->V->GetVideoProperties();
         if (VP.VF.ColorFamily == 4)
             throw BestSourceException("Unsupported source colorspace (bayer)");
-        if ((VP.VF.ColorFamily == 0 && VariableFormat != -1) || !vsapi->queryVideoFormat(&D->VI.format, VP.VF.ColorFamily, VP.VF.Float, VP.VF.Bits, VP.VF.SubSamplingW, VP.VF.SubSamplingH, Core))
+        /* With every format set kept, a track whose format or size changes is published as a
+           variable node: format and dimensions stay unset here and each frame carries its own,
+           checked as it is produced. A selected set is constant and has to be representable up
+           front. */
+        const bool VariableNode = (VariableFormat == -1);
+        if (VP.VF.ColorFamily == 0) {
+            if (!VariableNode)
+                throw BestSourceException("Unsupported video format from decoder (probably less than 8 bit or palette)");
+        } else if (!vsapi->queryVideoFormat(&D->VI.format, VP.VF.ColorFamily, VP.VF.Float, VP.VF.Bits, VP.VF.SubSamplingW, VP.VF.SubSamplingH, Core)) {
             throw BestSourceException("Unsupported video format from decoder (probably less than 8 bit or palette)");
+        }
 
-        if (VP.SSModWidth == 0 || VP.SSModHeight == 0)
+        if ((VP.SSModWidth == 0 || VP.SSModHeight == 0) && !(VariableNode && VP.Width == 0 && VP.Height == 0))
             throw BestSourceException("Rounding dimensions down to nearest subsampling multiple leaves nothing to output");
 
         D->RFFIsUsed = (VP.NumFrames != VP.NumRFFFrames);

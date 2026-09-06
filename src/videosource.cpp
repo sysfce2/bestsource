@@ -606,6 +606,17 @@ void BSVideoFormat::Set(const AVPixFmtDescriptor *Desc) {
     SubSamplingH = Desc->log2_chroma_h;
 }
 
+/* The visible size of a frame. FFmpeg applies only the right and bottom crop to hardware frames,
+   whose memory it cannot address into, and leaves the left and top as properties for whoever
+   reads the image; software frames arrive fully cropped with those at zero. */
+static int VisibleWidth(const AVFrame *F) {
+    return F->width - static_cast<int>(F->crop_left);
+}
+
+static int VisibleHeight(const AVFrame *F) {
+    return F->height - static_cast<int>(F->crop_top);
+}
+
 BestVideoFrame::BestVideoFrame(AVFrame *F) {
     assert(F);
     Frame = av_frame_clone(F);
@@ -614,8 +625,8 @@ BestVideoFrame::BestVideoFrame(AVFrame *F) {
     auto Desc = av_pix_fmt_desc_get(GetEffectivePixelFormat(Frame));
     VF.Set(Desc);
     PTS = Frame->pts;
-    Width = Frame->width;
-    Height = Frame->height;
+    Width = VisibleWidth(Frame);
+    Height = VisibleHeight(Frame);
     SSModWidth = Width - (Width % (1 << VF.SubSamplingW));
     SSModHeight = Height - (Height % (1 << VF.SubSamplingH));
     Duration = Frame->duration;
@@ -735,7 +746,13 @@ static void MergeFieldInto(AVFrame *Dst, const AVFrame *FieldSrc, bool Top) {
         int DstLineSize = Dst->linesize[Plane];
         uint8_t *SrcData = FieldSrc->data[Plane];
         int SrcLineSize = FieldSrc->linesize[Plane];
-        int MinLineSize = std::min(SrcLineSize, DstLineSize);
+        if (!DstData || !SrcData)
+            continue;
+        /* The row's visible bytes come from the format: a stride is signed, negative for a
+           bottom-up frame, and only ever steps between rows. */
+        const int LineBytes = av_image_get_linesize(static_cast<AVPixelFormat>(Dst->format), Dst->width, Plane);
+        if (LineBytes <= 0)
+            continue;
 
         if (!Top) {
             DstData += DstLineSize;
@@ -747,7 +764,7 @@ static void MergeFieldInto(AVFrame *Dst, const AVFrame *FieldSrc, bool Top) {
             PlaneHeight >>= Desc->log2_chroma_h;
 
         for (int h = Top ? 0 : 1; h < PlaneHeight; h += 2) {
-            memcpy(DstData, SrcData, MinLineSize);
+            memcpy(DstData, SrcData, LineBytes);
             DstData += 2 * DstLineSize;
             SrcData += 2 * SrcLineSize;
         }
@@ -771,6 +788,12 @@ const AVFrame *BestVideoFrame::GetCPUFrame() const {
         throw BestSourceException("Failed to transfer frame from the GPU");
     }
     av_frame_copy_props(CPUFrame, Frame);
+    /* The left and top crop came along as properties; applied here so the copy addresses the
+       visible picture the way a software decode already does. */
+    if (av_frame_apply_cropping(CPUFrame, AV_FRAME_CROP_UNALIGNED) < 0) {
+        av_frame_free(&CPUFrame);
+        throw BestSourceException("Failed to crop the frame transferred from the GPU");
+    }
 
     /* A merge MergeField could not perform on the device. Both sides come back and the interleave
        happens on the readback, which is ours alone and therefore safe to write. Two transfers is
@@ -785,6 +808,12 @@ const AVFrame *BestVideoFrame::GetCPUFrame() const {
             av_frame_free(&Donor);
             av_frame_free(&CPUFrame);
             throw BestSourceException("Failed to transfer frame from the GPU");
+        }
+        av_frame_copy_props(Donor, FieldSrcFrame);
+        if (av_frame_apply_cropping(Donor, AV_FRAME_CROP_UNALIGNED) < 0) {
+            av_frame_free(&Donor);
+            av_frame_free(&CPUFrame);
+            throw BestSourceException("Failed to crop the frame transferred from the GPU");
         }
         MergeFieldInto(CPUFrame, Donor, FieldSrcIsTop);
         av_frame_free(&Donor);
@@ -1459,7 +1488,7 @@ bool BestVideoSource::IndexTrack(const ProgressFunction &Progress) {
         HasKeyFrames = HasKeyFrames || !!(F->flags & AV_FRAME_FLAG_KEY);
         if (TrackIndex.Frames.size() < 100)
             HasEarlyKeyFrames = HasKeyFrames;
-        TrackIndex.Frames.push_back({ F->pts, F->repeat_pict, !!(F->flags & AV_FRAME_FLAG_KEY), !!(F->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST), GetEffectivePixelFormat(F), F->width, F->height, HashDecodedFrame(Decoder.get(), F) });
+        TrackIndex.Frames.push_back({ F->pts, F->repeat_pict, !!(F->flags & AV_FRAME_FLAG_KEY), !!(F->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST), GetEffectivePixelFormat(F), VisibleWidth(F), VisibleHeight(F), HashDecodedFrame(Decoder.get(), F) });
         TrackIndex.LastFrameDuration = F->duration;
 
         av_frame_free(&F);
@@ -1654,8 +1683,15 @@ namespace {
             AVFrame *Hw = av_frame_alloc();
             if (!Hw)
                 return false;
-            if (av_hwframe_get_buffer(E.FramesCtx, Hw, 0) < 0 ||
-                av_hwframe_transfer_data(Hw, E.Frame, 0) < 0) {
+            if (av_hwframe_get_buffer(E.FramesCtx, Hw, 0) < 0) {
+                av_frame_free(&Hw);
+                return false;
+            }
+            /* The pool hands out its own, aligned size; the frame keeps the size it was demoted
+               with, which is what the index and every consumer describe. */
+            Hw->width = E.Frame->width;
+            Hw->height = E.Frame->height;
+            if (av_hwframe_transfer_data(Hw, E.Frame, 0) < 0) {
                 av_frame_free(&Hw);
                 return false;
             }
@@ -2343,7 +2379,7 @@ bool BestVideoSource::GetFrameIsTFF(int64_t N, bool RFF) {
         return TrackIndex.Frames[GetOriginalFrameNumber(N)].TFF;
     } else {
         if (RFFFields[N].first == RFFFields[N].second)
-            return TrackIndex.Frames[RFFFields[N].first].TFF;
+            return TrackIndex.Frames[GetOriginalFrameNumber(RFFFields[N].first)].TFF;
         else
             return (RFFFields[N].first < RFFFields[N].second);
     }

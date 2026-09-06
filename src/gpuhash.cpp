@@ -131,6 +131,7 @@ struct BSHashExportPushConstants {
     int32_t OffsetY, OffsetU, OffsetV;
     int32_t ExportShift;
     int32_t RowOffset, RowStep;
+    int32_t SrcX, SrcY, SrcChromaX, SrcChromaY;
 };
 
 /* One frame feeding one dispatch, and which rows of the output it supplies. A whole frame is
@@ -625,8 +626,14 @@ uint64_t BSGpuHasher::Impl::RunDispatch(const DispatchSource *Sources, int NumSo
     const bool DoExport = (Targets != nullptr);
     const AVFrame *Frame = Sources[0].Frame;
 
-    if (DoExport && (ExportWidth <= 0 || ExportHeight <= 0 || ExportWidth > Frame->width || ExportHeight > Frame->height))
-        throw BestSourceHWDecoderException("GPU export: destination size must be positive and no larger than the decoded frame");
+    /* A hardware frame keeps its left and top crop as properties, since FFmpeg cannot address into
+       the image to apply them; an export reads from that origin so the destination receives the
+       visible picture. The hash covers the whole decoded image, which only has to agree with
+       itself. */
+    const int OriginX = DoExport ? static_cast<int>(Frame->crop_left) : 0;
+    const int OriginY = DoExport ? static_cast<int>(Frame->crop_top) : 0;
+    if (DoExport && (ExportWidth <= 0 || ExportHeight <= 0 || ExportWidth > Frame->width - OriginX || ExportHeight > Frame->height - OriginY))
+        throw BestSourceHWDecoderException("GPU export: destination size must be positive and no larger than the visible decoded frame");
 
     /* What the shader bounds itself by, per plane. The decoded size for hashing, the destination
        size for export: a decoder pads odd dimensions up to the subsampling grid, the destination
@@ -649,7 +656,8 @@ uint64_t BSGpuHasher::Impl::RunDispatch(const DispatchSource *Sources, int NumSo
     for (int s = 0; s < NumSources; s++) {
         const AVFrame *F = Sources[s].Frame;
         FC[s] = reinterpret_cast<AVHWFramesContext *>(F->hw_frames_ctx->data);
-        if (F->width != Frame->width || F->height != Frame->height || FC[s]->sw_format != Frames->sw_format)
+        if (F->width != Frame->width || F->height != Frame->height || FC[s]->sw_format != Frames->sw_format ||
+            F->crop_left != Frame->crop_left || F->crop_top != Frame->crop_top)
             throw BestSourceHWDecoderException("GPU export: merged frames must have the same format and size");
         Vkf[s] = reinterpret_cast<AVVkFrame *>(F->data[0]);
         for (int t = 0; t < s; t++)
@@ -661,7 +669,8 @@ uint64_t BSGpuHasher::Impl::RunDispatch(const DispatchSource *Sources, int NumSo
         Width, Height,
         AV_CEIL_RSHIFT(Width, Desc->log2_chroma_w),
         AV_CEIL_RSHIFT(Height, Desc->log2_chroma_h),
-        0, 0, 0, 0, 0, 0, 0, 1
+        0, 0, 0, 0, 0, 0, 0, 1,
+        OriginX, OriginY, OriginX >> Desc->log2_chroma_w, OriginY >> Desc->log2_chroma_h
     };
 
     if (DoExport) {
